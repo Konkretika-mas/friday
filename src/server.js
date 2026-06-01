@@ -454,6 +454,31 @@ app.post('/onboard/api/run', authMiddleware, async (req, res) => {
       }
     }
 
+    // When OpenRouter is selected, ensure agents.defaults.model.primary points to an
+    // OpenRouter model. The default config uses 'anthropic/claude-sonnet-4' which
+    // requires a direct Anthropic key — if only an OpenRouter key is configured,
+    // memory indexing and all agent calls will fail with "API key for provider
+    // 'openai' (or 'anthropic') not found". Set a sensible OpenRouter default so
+    // the gateway starts cleanly without requiring a second provider key.
+    if (authChoice === 'openrouter-api-key' && existsSync(configFile)) {
+      try {
+        const config = JSON.parse(readFileSync(configFile, 'utf8'));
+        const currentPrimary = config.agents?.defaults?.model?.primary || '';
+        // Only override if the current primary model is NOT already an openrouter/ model
+        if (!currentPrimary.startsWith('openrouter/')) {
+          config.agents = config.agents || {};
+          config.agents.defaults = config.agents.defaults || {};
+          config.agents.defaults.model = config.agents.defaults.model || {};
+          config.agents.defaults.model.primary = 'openrouter/anthropic/claude-sonnet-4-5';
+          sanitizeOpenClawConfig(config);
+          writeFileSync(configFile, JSON.stringify(config, null, 2));
+          logs.push(`Set default model to openrouter/anthropic/claude-sonnet-4-5 for OpenRouter provider`);
+        }
+      } catch (e) {
+        logs.push(`Warning: failed to set OpenRouter default model: ${e.message}`);
+      }
+    }
+
     // Install skill files to disk (downloads are independent of gateway state)
     if (skills && Array.isArray(skills)) {
       const skillsDir = join(OPENCLAW_STATE_DIR, 'skills');

@@ -151,16 +151,24 @@ export function migrateConfig(config) {
 }
 
 /**
- * Get the default minimal config for a new installation
+ * Get the default minimal config for a new installation.
+ * When OPENROUTER_API_KEY is set in the environment, defaults to an OpenRouter
+ * model so the gateway starts cleanly without requiring a separate Anthropic key.
  * @param {number} port - Gateway port
  * @returns {Object} Minimal valid config
  */
 export function getDefaultConfig(port) {
+  // Prefer OpenRouter when its API key is already in the environment, so the
+  // gateway doesn't fail on startup trying to use a provider that isn't configured.
+  const defaultModel = process.env.OPENROUTER_API_KEY
+    ? 'openrouter/anthropic/claude-sonnet-4-5'
+    : 'anthropic/claude-sonnet-4';
+
   return {
     agents: {
       defaults: {
         model: {
-          primary: 'anthropic/claude-sonnet-4'
+          primary: defaultModel
         }
       }
     },

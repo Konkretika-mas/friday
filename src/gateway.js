@@ -274,8 +274,11 @@ export async function startGateway() {
   // works when shared authentication (Bearer token) is already present on the
   // connection. The proxy (src/proxy.js) works around this by injecting the gateway
   // token on dashboard WebSocket upgrades while stripping it from CLI connections.
-  config.gateway.controlUi.allowInsecureAuth = true;
-  config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+  // WARNING: These flags bypass device pairing and should only be enabled for local
+  // development. In production, keep them false — the wrapper's token auth + HTTPS
+  // provides the necessary security boundary.
+  config.gateway.controlUi.allowInsecureAuth = false;
+  config.gateway.controlUi.dangerouslyDisableDeviceAuth = false;
 
   // Allow the Railway public domain as a WebSocket origin so the Control UI works
   const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
@@ -896,21 +899,11 @@ function syncGatewayToken(configFile, originalToken, stateDir) {
 async function runPostStartupTasks(configFile, context = '') {
   const logSuffix = context ? ` (${context})` : '';
 
-  // 1. Start managed browser profile (gateway doesn't auto-start it)
-  try {
-    const liveConfig = JSON.parse(readFileSync(configFile, 'utf-8'));
-    if (liveConfig.browser?.executablePath) {
-      console.log(`Starting browser profile "openclaw"${logSuffix}...`);
-      const result = await runCmd('browser', ['--browser-profile', 'openclaw', 'start']);
-      if (result.code === 0) {
-        console.log(`Browser profile "openclaw" started${logSuffix}`);
-      } else {
-        console.warn(`Browser profile start code ${result.code}${logSuffix}: ${(result.stderr || result.stdout || '').trim()}`);
-      }
-    }
-  } catch (e) {
-    console.warn(`Browser profile start failed${logSuffix}: ${e.message}`);
-  }
+  // Note: Browser profile startup is intentionally omitted here.
+  // The "browser" command does not exist in the Docker container environment and
+  // attempting to start it at gateway startup causes a "command not found" error.
+  // The browser tool is available on-demand via the agent's built-in browser
+  // capability — it does not need to be pre-started at gateway boot time.
 
   // 2. Re-apply bundled skill config if the gateway dropped it during startup
   if (process.env.SEARXNG_URL) {
