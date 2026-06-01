@@ -268,14 +268,22 @@ export async function startGateway() {
   config.gateway.auth = { mode: 'token', token };
   config.gateway.controlUi = config.gateway.controlUi || {};
   config.gateway.controlUi.basePath = '/openclaw';
-  // Allow token-only auth without device pairing — safe because the gateway is bound
-  // to loopback and our wrapper enforces SETUP_PASSWORD + HTTPS externally.
-  // Note: dangerouslyDisableDeviceAuth has an upstream bug (#29801) where it only
-  // works when shared authentication (Bearer token) is already present on the
-  // connection. The proxy (src/proxy.js) works around this by injecting the gateway
-  // token on dashboard WebSocket upgrades while stripping it from CLI connections.
-  config.gateway.controlUi.allowInsecureAuth = true;
-  config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+  
+  // SECURITY: Only enable insecure auth if explicitly opt-in (default: false for safety)
+  // These flags allow token-only auth without device pairing — only safe on loopback
+  // when SETUP_PASSWORD + HTTPS are enforced externally.
+  // WARNING: On public domains, this is a critical security risk. The proxy (src/proxy.js)
+  // mitigates by injecting gateway token on WebSocket upgrades while stripping it from CLI.
+  const allowInsecureAuth = process.env.ALLOW_INSECURE_AUTH === 'true';
+  if (allowInsecureAuth) {
+    config.gateway.controlUi.allowInsecureAuth = true;
+    config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+    console.warn('⚠️  ALLOW_INSECURE_AUTH=true — control-UI device auth disabled. Only safe on loopback.');
+  } else {
+    config.gateway.controlUi.allowInsecureAuth = false;
+    config.gateway.controlUi.dangerouslyDisableDeviceAuth = false;
+    console.log('Control-UI device auth enabled (secure). Set ALLOW_INSECURE_AUTH=true only if needed for development.');
+  }
 
   // Allow the Railway public domain as a WebSocket origin so the Control UI works
   const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
@@ -317,6 +325,21 @@ export async function startGateway() {
   if (!config.memory.backend) {
     config.memory.backend = 'builtin';
     console.log('Set memory backend to builtin');
+  }
+
+  // Configure embedding provider for memory (optional; required if memory.backend uses embeddings)
+  // Supports: 'openai' (default), 'ollama', 'cohere', etc.
+  if (process.env.MEMORY_EMBEDDING_PROVIDER) {
+    config.memory.embeddings = config.memory.embeddings || {};
+    config.memory.embeddings.provider = process.env.MEMORY_EMBEDDING_PROVIDER;
+    console.log(`Set memory embedding provider to ${process.env.MEMORY_EMBEDDING_PROVIDER}`);
+  }
+
+  // Configure embedding API key if provider requires it
+  if (process.env.MEMORY_EMBEDDING_KEY) {
+    config.memory.embeddings = config.memory.embeddings || {};
+    config.memory.embeddings.apiKey = process.env.MEMORY_EMBEDDING_KEY;
+    console.log('Configured memory embedding API key');
   }
 
   // Auto-enable bundled skills when their env vars are present.
