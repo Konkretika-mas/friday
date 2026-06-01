@@ -13,7 +13,7 @@
 
 import express from 'express';
 import { createServer } from 'http';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, readdirSync, lstatSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, createWriteStream, readdirSync, lstatSync, copyFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import JSZip from 'jszip';
@@ -161,6 +161,50 @@ async function installBwcSkill(slug, skillsDir) {
  */
 async function installClawHubSkill(slug, skillsDir) {
   return runExec('npx', ['clawhub', 'install', slug, '--dir', skillsDir]);
+}
+
+function detectPrimaryModelProvider(config) {
+  if (!config || typeof config !== 'object') return null;
+
+  const providers = config.models?.providers;
+  const providerKeys = providers && typeof providers === 'object'
+    ? Object.keys(providers)
+    : [];
+
+  const model = config.agents?.defaults?.model?.primary || config.agent?.model;
+  if (typeof model === 'string') {
+    const [prefix] = model.split('/');
+    if (prefix && providerKeys.includes(prefix)) {
+      return prefix;
+    }
+    if (providerKeys.length === 1) {
+      return providerKeys[0];
+    }
+    if (providerKeys.includes('openrouter')) {
+      return 'openrouter';
+    }
+    if (providerKeys.includes('openai')) {
+      return 'openai';
+    }
+    return prefix || null;
+  }
+
+  if (providerKeys.length === 1) {
+    return providerKeys[0];
+  }
+
+  return null;
+}
+
+function shouldResetStaleAuthConfig(config, authChoice) {
+  const activeProvider = detectPrimaryModelProvider(config);
+  if (!activeProvider) return false;
+
+  if (authChoice === 'openrouter-api-key') {
+    return activeProvider.startsWith('openai');
+  }
+
+  return false;
 }
 
 // Create Express app
@@ -401,10 +445,37 @@ app.post('/onboard/api/run', authMiddleware, async (req, res) => {
       if (onboardResult.stderr) logs.push(onboardResult.stderr.trim());
 
       if (onboardResult.code !== 0) {
-        // onboard always tries to verify the gateway connection after writing config.
-        // Since no gateway is running yet (we start it below), the verification fails
-        // and onboard exits non-zero. Check if config was actually written — if so,
-        // treat the gateway verification failure as non-fatal and continue.
+        if (!existsSync(configFile)) {
+          return res.json({ success: false, logs });
+        }
+
+        let existingConfig = null;
+        try {
+          existingConfig = JSON.parse(readFileSync(configFile, 'utf8'));
+        } catch (e) {
+          logs.push(`Warning: failed to parse existing config after onboard failure: ${e.message}`);
+        }
+
+        if (existingConfig && shouldResetStaleAuthConfig(existingConfig, authChoice)) {
+          const backupPath = join(OPENCLAW_STATE_DIR, `openclaw.json.bak.${Date.now()}`);
+          try {
+            copyFileSync(configFile, backupPath);
+            unlinkSync(configFile);
+            logs.push(`Detected stale provider config (${detectPrimaryModelProvider(existingConfig)}) when selecting OpenRouter; backed up old config to ${backupPath} and retrying setup.`);
+
+            const retryResult = await runCmd('onboard', onboardArgs);
+            if (retryResult.stdout) logs.push(retryResult.stdout.trim());
+            if (retryResult.stderr) logs.push(retryResult.stderr.trim());
+            if (retryResult.code === 0) {
+              logs.push('Retry successful after resetting stale config.');
+            } else {
+              logs.push('Retry failed after resetting stale config.');
+            }
+          } catch (err) {
+            logs.push(`Warning: failed to reset stale config: ${err.message}`);
+          }
+        }
+
         if (!existsSync(configFile)) {
           return res.json({ success: false, logs });
         }

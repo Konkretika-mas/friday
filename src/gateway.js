@@ -713,6 +713,22 @@ export function sanitizeOpenClawConfig(config) {
       }
     }
   }
+
+  // If OpenRouter is active, remove any stale OpenAI provider definitions that
+  // may have been left behind from a previous config iteration.
+  const providerKeys = config.models?.providers ? Object.keys(config.models.providers) : [];
+  if (providerKeys.includes('openrouter')) {
+    for (const staleProvider of ['openai', 'openai-codex']) {
+      if (config.models.providers?.[staleProvider]) {
+        const primary = config.agents?.defaults?.model?.primary || config.agent?.model;
+        if (typeof primary === 'string' && !primary.startsWith(`${staleProvider}/`)) {
+          delete config.models.providers[staleProvider];
+          console.log(`Removed stale provider "${staleProvider}" because OpenRouter is active`);
+        }
+      }
+    }
+  }
+
   return config;
 }
 
